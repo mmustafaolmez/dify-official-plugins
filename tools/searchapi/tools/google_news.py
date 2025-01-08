@@ -1,7 +1,9 @@
-from typing import Any, Generator
+from typing import Any, Union
+
 import requests
-from dify_plugin.entities.tool import ToolInvokeMessage
-from dify_plugin import Tool
+
+from core.tools.entities.tool_entities import ToolInvokeMessage
+from core.tools.tool.builtin_tool import BuiltinTool
 
 SEARCH_API_URL = "https://www.searchapi.io/api/v1/search"
 
@@ -24,24 +26,31 @@ class SearchAPI:
         """Run query through SearchAPI and return the raw result."""
         params = self.get_params(query, **kwargs)
         response = requests.get(
-            url=SEARCH_API_URL, params=params, headers={"Authorization": f"Bearer {self.searchapi_api_key}"}
+            url=SEARCH_API_URL,
+            params=params,
+            headers={"Authorization": f"Bearer {self.searchapi_api_key}"},
         )
         response.raise_for_status()
         return response.json()
 
     def get_params(self, query: str, **kwargs: Any) -> dict[str, str]:
         """Get parameters for SearchAPI."""
-        return {
+        params = {
             "engine": "google_news",
             "q": query,
-            **{key: value for (key, value) in kwargs.items() if value not in {None, ""}},
         }
+        # Add all non-empty parameters
+        for key, value in kwargs.items():
+            if value not in {None, ""}:
+                params[key] = value
+        return params
 
     @staticmethod
     def _process_response(res: dict, type: str) -> str:
         """Process response from SearchAPI."""
         if "error" in res:
             return res["error"]
+
         toret = ""
         if type == "text":
             if "organic_results" in res and "snippet" in res["organic_results"][0]:
@@ -52,6 +61,7 @@ class SearchAPI:
                     toret += "title: " + item["title"] + "\n" + "link: " + item["link"] + "\n"
             if toret == "":
                 toret = "No good search result found"
+
         elif type == "link":
             if "organic_results" in res and "title" in res["organic_results"][0]:
                 for item in res["organic_results"]:
@@ -64,10 +74,12 @@ class SearchAPI:
         return toret
 
 
-class GoogleNewsTool(Tool):
+class GoogleNewsTool(BuiltinTool):
     def _invoke(
-        self, tool_parameters: dict[str, Any]
-    ) -> Generator[ToolInvokeMessage, None, None]:
+        self,
+        user_id: str,
+        tool_parameters: dict[str, Any],
+    ) -> Union[ToolInvokeMessage, list[ToolInvokeMessage]]:
         """
         Invoke the SearchApi tool.
         """
@@ -78,10 +90,14 @@ class GoogleNewsTool(Tool):
         gl = tool_parameters.get("gl", "us")
         hl = tool_parameters.get("hl", "en")
         location = tool_parameters.get("location")
+        time_period = tool_parameters.get("time_period", "last_month")
+
         api_key = self.runtime.credentials["searchapi_api_key"]
         result = SearchAPI(api_key).run(
-            query, result_type=result_type, num=num, google_domain=google_domain, gl=gl, hl=hl, location=location
+            query, result_type=result_type, num=num, google_domain=google_domain, gl=gl, hl=hl, location=location,
+            time_period=time_period
         )
+
         if result_type == "text":
-            yield self.create_text_message(text=result)
-        yield self.create_link_message(link=result)
+            return self.create_text_message(text=result)
+        return self.create_link_message(link=result)
